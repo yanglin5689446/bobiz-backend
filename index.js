@@ -1,9 +1,7 @@
 
 const express = require('express')
-const { uuid } = require('uuidv4')
 
 const fcl = require('@onflow/fcl')
-const types = require('@onflow/types')
 const cors = require('cors')
 
 const { initializeApp } = require('firebase/app')
@@ -40,7 +38,7 @@ const FLOW_TIERS = [
 
 const GROWTH_RATE = 3333
 
-const makeBobiz = () => {
+const makeBobiz = (id) => {
   const roll = Math.random();
   const variations = (() => {
     switch(true) {
@@ -50,7 +48,7 @@ const makeBobiz = () => {
     }
   })()
   return ({
-    id: uuid(),
+    id,
     absorbed: 0,
     ...variations
   })
@@ -172,7 +170,7 @@ app.get('/users/:address', async function(req, res) {
 })
 
 // create bobizs
-app.post('/users/:address/bobizs', async function(req, res) {
+app.post('/users/:address/bobizs/:id', async function(req, res) {
   try {
     const userDoc = doc(db, "users", req.params.address);
     const ref = await getDoc(userDoc)
@@ -181,13 +179,17 @@ app.post('/users/:address/bobizs', async function(req, res) {
 
     const maximum = data.container.maxBobizs
 
+    const id = req.params.id
+
     if(data.seeds <= 0) {
       throw new Error("E_NOT_ENOUGH_SEEDS")
     } else if (data.bobizs.length >= maximum) {
       throw new Error("E_LIMIT_EXCEED")
+    } else if(data.bobizs.find(bobiz => bobiz.id === id) != null) {
+      throw new Error("E_DUPLICATE_ID")
     }
 
-    const newlyCreated = makeBobiz()
+    const newlyCreated = makeBobiz(id)
     data.bobizs.push(newlyCreated)
     data.seeds -= 1;
 
@@ -201,7 +203,7 @@ app.post('/users/:address/bobizs', async function(req, res) {
 })
 
 // harvest bobizs
-app.post('/users/:address/bobizs/:id', async function(req, res) {
+app.post('/users/:address/bobizs/:id/harvest', async function(req, res) {
   try {
     const userDoc = doc(db, "users", req.params.address);
     const ref = await getDoc(userDoc)
@@ -285,7 +287,7 @@ app.post('/users/:address', async function(req, res) {
       bobizs: [],
       bobizCoin: 0,
       seeds: 10,
-      harvested: [0, 0, 0],
+      harvested: [0, 0, 0, 0],
       growthRate: GROWTH_RATE,
       updatedAt: Date.now()
     }
