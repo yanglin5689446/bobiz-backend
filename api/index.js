@@ -38,22 +38,6 @@ const FLOW_TIERS = [
 
 const GROWTH_RATE = 3333
 
-const makeBobiz = (id) => {
-  const roll = Math.random();
-  const variations = (() => {
-    switch(true) {
-      case roll > 0.99: return { capacity: 96 * 120 * UNIT, variant: 3 };
-      case roll > 0.9: return { capacity: 48 * 120 * UNIT, variant: 2 };
-      default: return { capacity: 24 * 120 * UNIT, variant: 1 };
-    }
-  })()
-  return ({
-    id,
-    absorbed: 0,
-    ...variations
-  })
-}
-
 const getStakedInfoScript = `
 import FungibleToken from 0xf233dcee88fe0abe
 import NonFungibleToken from 0x1d7e57aa55817448
@@ -131,7 +115,60 @@ const executeScript = async (script, args = []) =>
     })
 */
 
-const updateGame = (user) => {
+function makeBobiz(id) {
+  const roll = Math.random();
+  const variations = (() => {
+    switch(true) {
+      case roll > 0.99: return { capacity: 96 * 120 * UNIT, variant: 3 };
+      case roll > 0.9: return { capacity: 48 * 120 * UNIT, variant: 2 };
+      default: return { capacity: 24 * 120 * UNIT, variant: 1 };
+    }
+  })()
+  return ({
+    id,
+    absorbed: 0,
+    ...variations
+  })
+}
+
+function createBobiz(user, id) {
+  const maximum = user.container.maxBobizs
+
+  if(user.seeds <= 0) {
+    throw new Error("E_NOT_ENOUGH_SEEDS")
+  } else if (user.bobizs.length >= maximum) {
+    throw new Error("E_CONTAINER_LIMIT_EXCEED")
+  } else if(user.bobizs.find(bobiz => bobiz.id === id) != null) {
+    throw new Error("E_DUPLICATED_ID")
+  }
+
+  user.bobizs.push(makeBobiz(id))
+  user.seeds -= 1;
+}
+
+function harvestBobiz(user, id) {
+  const index = user.bobizs.findIndex(d => d.id === id);
+  if(index == -1) {
+    throw new Error("E_ID_NOT_FOUND")
+  }
+
+  const found = user.bobizs[index];
+
+  if (found.absorbed < found.capacity) {
+    throw new Error("E_NOT_HARVESTABLE")
+  }
+
+  user.bobizCoin += 10
+
+  user.bobizs.splice(index, 1)
+  user.harvested[found.variant] += 1;
+}
+
+function updateGame(user, delta) {
+
+  delta?.bobizs?.harvested.forEach(id => harvestBobiz(user, id))
+  delta?.bobizs?.created.forEach(id => createBobiz(user, id))
+
   const now = Date.now()
   const timeDiff = now - user.updatedAt
   let amount = user.flow * timeDiff / 1000
@@ -151,106 +188,58 @@ const updateGame = (user) => {
   return user
 }
 
-// get user info
-app.get('/users/:address', async function(req, res) {
-  try {
-    const userDoc = doc(db, "users", req.params.address);
-    const ref = await getDoc(userDoc)
-    const prev = ref.data()
+async function initializeUser() {
+  // initialized user
+  // check stake status
+  /*
+  const response = await fcl
+    .send([
+      fcl.script(getStakedInfoScript),
+      fcl.args([
+        fcl.arg(req.params.address, types.Address),
+        fcl.arg(0, types.Int),
+      ]),
+    ])
+    .then(fcl.decode)
 
-    if (!prev) return res.send({ data: null })
-
-    const data = updateGame(prev);
-    await setDoc(userDoc, data)
-
-    res.send({ data })
-  } catch (error) {
-    res.send({ error: error.message  })
+  const staked = +response.tokensCommitted + +response.tokenStaked
+  
+  if(staked < 1) {
+    throw new Error("E_NOT_STAKED")
   }
-})
+  */
 
-// create bobizs
-app.post('/users/:address/bobizs/:id', async function(req, res) {
-  try {
-    const userDoc = doc(db, "users", req.params.address);
-    const ref = await getDoc(userDoc)
-
-    const data = ref.data()
-
-    const maximum = data.container.maxBobizs
-
-    const id = req.params.id
-
-    if(data.seeds <= 0) {
-      throw new Error("E_NOT_ENOUGH_SEEDS")
-    } else if (data.bobizs.length >= maximum) {
-      throw new Error("E_LIMIT_EXCEED")
-    } else if(data.bobizs.find(bobiz => bobiz.id === id) != null) {
-      throw new Error("E_DUPLICATE_ID")
-    }
-
-    const newlyCreated = makeBobiz(id)
-    data.bobizs.push(newlyCreated)
-    data.seeds -= 1;
-
-    const user = updateGame(data)
-
-    await setDoc(userDoc, user)
-    res.send({ data: newlyCreated });
-  } catch(error) {
-    res.send({ error: error.message })
+  // initialize user
+  const user = {
+    container: CONTAINER_TIERS[0],
+    flow: FLOW_TIERS[0],
+    bobizs: [],
+    bobizCoin: 0,
+    seeds: 10,
+    harvested: [0, 0, 0, 0],
+    growthRate: GROWTH_RATE,
+    updatedAt: Date.now()
   }
-})
 
-// harvest bobizs
-app.post('/users/:address/bobizs/:id/harvest', async function(req, res) {
-  try {
-    const userDoc = doc(db, "users", req.params.address);
-    const ref = await getDoc(userDoc)
-
-    const data = ref.data()
-
-    const index = data.bobizs.findIndex(d => d.id === req.params.id);
-    if(index == -1) {
-      throw new Error("E_ID_NOT_FOUND")
-    }
-
-    const found = data.bobizs[index];
-
-    if (found.absorbed < found.capacity) {
-      throw new Error("E_NOT_HARVESTABLE")
-    }
-
-    data.bobizCoin += 10
-
-    data.bobizs.splice(index, 1)
-    data.harvested[found.variant] += 1;
-    const user = updateGame(data)
-    // @todo: reward user with NFTs
-
-    await setDoc(userDoc, user)
-    res.send({ data: user });
-  } catch(error) {
-    res.send({ error: error.message })
-  }
-})
+  await setDoc(doc(db, "users", req.params.address), user)
+  return user
+}
 
 // buy seeds
-app.post('/users/:address/seeds', async function(req, res) {
+app.post('/api/users/:address/seeds', async function(req, res) {
   try {
     const userDoc = doc(db, "users", req.params.address);
     const ref = await getDoc(userDoc)
 
     const amount = req.body.amount || 1
 
-    const data = ref.data()
+    const user = ref.data()
 
     const required = 5 * amount
-    if(data.bobizCoin >= required) {
-      data.bobizCoin -= required
-      data.seeds += amount
+    if(user.bobizCoin >= required) {
+      user.bobizCoin -= required
+      user.seeds += amount
     }
-    const user = updateGame(data)
     await setDoc(userDoc, user)
     res.send({ data: user.seeds });
   } catch(error) {
@@ -258,44 +247,27 @@ app.post('/users/:address/seeds', async function(req, res) {
   }
 })
 
-// create new user record
-app.post('/users/:address', async function(req, res) {
+
+// sync game status
+app.post('/api/users/:address/status', async function(req, res) {
   try {
-    // check stake status
-    /*
-    const response = await fcl
-      .send([
-        fcl.script(getStakedInfoScript),
-        fcl.args([
-          fcl.arg(req.params.address, types.Address),
-          fcl.arg(0, types.Int),
-        ]),
-      ])
-      .then(fcl.decode)
+    const userDoc = doc(db, "users", req.params.address);
+    const ref = await getDoc(userDoc)
 
-    const staked = +response.tokensCommitted + +response.tokenStaked
-    
-    if(staked < 1) {
-      throw new Error("E_NOT_STAKED")
-    }
-    */
-
-    // initialize user
-    const instance = {
-      container: CONTAINER_TIERS[0],
-      flow: FLOW_TIERS[0],
-      bobizs: [],
-      bobizCoin: 0,
-      seeds: 10,
-      harvested: [0, 0, 0, 0],
-      growthRate: GROWTH_RATE,
-      updatedAt: Date.now()
+    // create user game status if user not exists
+    if(!ref.exists()) {
+      const data = initializeUser()
+      return res.send({ data })
     }
 
-    await setDoc(doc(db, "users", req.params.address), instance)
-    res.send({ data: instance });
-  } catch(error) {
-    res.send({ error: error.message })
+    const delta = req.body
+    const status = ref.data()
+    const data = updateGame(status, delta)
+    await setDoc(userDoc, data)
+
+    res.send({ data })
+  } catch (error) {
+    res.send({ error: error.message  })
   }
 })
 
